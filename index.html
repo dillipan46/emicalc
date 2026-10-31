@@ -1,0 +1,329 @@
+<meta name='viewport' content='width=device-width, initial-scale=1'/><!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Daily Reducing Loan Calculator</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- PapaParse Library for reliable CSV parsing -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+
+<style>
+body {
+  font-family: Arial, sans-serif;
+  background: #f4f4f4;
+  padding: 10px;
+}
+.card {
+  background: #fff;
+  padding: 12px;
+  border-radius: 8px;
+  margin-bottom: 10px;
+}
+h3 {
+  text-align: center;
+  margin-bottom: 10px;
+}
+input, select {
+  width: 100%;
+  padding: 9px;
+  margin-top: 6px;
+  font-size: 14px;
+  box-sizing: border-box;
+}
+.radio-group {
+  margin-top: 8px;
+  font-size: 14px;
+}
+.radio-group label {
+  margin-right: 12px;
+}
+button {
+  width: 100%;
+  padding: 12px;
+  margin-top: 12px;
+  font-size: 16px;
+  background: #007bff;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.btn-refresh {
+  background: #28a745;
+  margin-top: 6px;
+}
+.status-msg {
+  font-size: 11px;
+  color: #666;
+  text-align: center;
+  margin-top: 5px;
+}
+.summary {
+  font-size: 14px;
+  margin-top: 10px;
+}
+.sheet-metrics {
+  background: #e9ecef;
+  padding: 10px;
+  border-radius: 6px;
+  margin-top: 10px;
+  font-size: 13px;
+}
+.sheet-metrics div {
+  margin-bottom: 6px;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin-top: 10px;
+}
+th, td {
+  border: 1px solid #ddd;
+  padding: 6px;
+  text-align: right;
+}
+th {
+  background: #eee;
+}
+th:first-child, td:first-child {
+  text-align: center;
+}
+</style>
+</head>
+
+<body>
+
+<div class="card">
+  <h3>Daily Reducing Loan Calculator</h3>
+
+  <label style="font-size: 12px; font-weight: bold;">Loan Balance</label>
+  <input type="number" id="principalAmount" placeholder="Loan Balance">
+
+  <button class="btn-refresh" onclick="fetchGoogleSheetData()">🔄 Sync with Google Sheet</button>
+  <div class="status-msg" id="syncStatus">Auto-syncing active</div>
+
+  <!-- Display-only synced metrics -->
+  <div class="sheet-metrics">
+    <div><b>Principal Paid :</b> ₹<span id="principalPaid">0</span></div>
+    <div><b>Additional Prepayment :</b> ₹<span id="additionalPrepaymentDisplay">0</span></div>
+    <div><b>Interest Paid So Far :</b> ₹<span id="interestPaidSoFar">0</span></div>
+    <div><b>Interest Balance :</b> ₹<span id="interestBalance">0</span></div>
+  </div>
+
+  <input type="number" id="interest" placeholder="Annual Interest Rate (%)" value="7.90">
+
+  <!-- EMI default -->
+  <input type="number" id="emi" value="22367" placeholder="Monthly EMI">
+
+  <!-- Monthly Extra Payment -->
+  <div class="radio-group">
+    <b>Additional Payment per Month</b><br>
+    <label><input type="radio" name="extraMonthly" value="0" checked> None</label>
+    <label><input type="radio" name="extraMonthly" value="3000"> ₹3,000</label>
+    <label><input type="radio" name="extraMonthly" value="5000"> ₹5,000</label>
+  </div>
+
+  <!-- Annual Extra Payment -->
+  <div class="radio-group">
+    <b>Additional Payment per Year</b><br>
+    <label><input type="radio" name="extraAnnual" value="0" checked> None</label>
+    <label><input type="radio" name="extraAnnual" value="50000"> ₹50,000</label>
+    <label><input type="radio" name="extraAnnual" value="100000"> ₹1,00,000</label>
+  </div>
+
+  <!-- Annual Month -->
+  <select id="annualMonth">
+    <option value="0">January</option>
+    <option value="1">February</option>
+    <option value="2">March</option>
+    <option value="3">April</option>
+    <option value="4">May</option>
+    <option value="5">June</option>
+    <option value="6">July</option>
+    <option value="7">August</option>
+    <option value="8">September</option>
+    <option value="9">October</option>
+    <option value="10">November</option>
+    <option value="11" selected>December</option>
+  </select>
+
+  <button onclick="calculate()">Calculate</button>
+
+  <div class="summary" id="summary"></div>
+</div>
+
+<div class="card">
+  <h3>Month-wise Amortization</h3>
+  <div style="overflow-x:auto;">
+    <table>
+      <thead>
+        <tr>
+          <th>Month</th>
+          <th>Opening</th>
+          <th>Interest</th>
+          <th>EMI</th>
+          <th>Extra</th>
+          <th>Closing</th>
+        </tr>
+      </thead>
+      <tbody id="tableBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRS8moMHvY2uaUg1QIoLa9axmDYI9S8XnyKiVmfazRMnIlmf_M0SyUy28wUUmjzlD7rLtzi5zqPpHBR/pub?gid=0&single=true&output=csv";
+
+function cleanNum(val) {
+  if (val === undefined || val === null) return 0;
+  let str = String(val).replace(/["\r]/g, '').trim().replace(/[^0-9.]/g, '');
+  return parseFloat(str) || 0;
+}
+
+async function fetchGoogleSheetData() {
+  const statusEl = document.getElementById("syncStatus");
+  statusEl.innerText = "Syncing with sheet...";
+  
+  try {
+    const response = await fetch(SHEET_CSV_URL + "&t=" + new Date().getTime());
+    if (!response.ok) throw new Error("HTTP error! status: " + response.status);
+    
+    const csvText = await response.text();
+    
+    Papa.parse(csvText, {
+      header: false,
+      skipEmptyLines: false,
+      complete: function(results) {
+        console.log("Parsed CSV Data:", results.data);
+
+        const rows = results.data;
+        if (rows && rows.length >= 5) {
+          // Cell mappings:
+          // F1 -> Row 0, Col 5 (Principal Paid - Display only)
+          // F3 -> Row 2, Col 5 (Additional Prepayment - Display only)
+          // H1 -> Row 0, Col 7 (Interest Paid So Far - Display only)
+          // H3 -> Row 2, Col 7 (Loan Balance -> Feeds principal calculation input)
+          // H5 -> Row 4, Col 7 (Interest Balance - Display only)
+
+          const principalPaidVal = cleanNum(rows[0] && rows[0][5]);
+          const prepayVal = cleanNum(rows[2] && rows[2][5]);
+          const interestPaidVal = cleanNum(rows[0] && rows[0][7]);
+          const loanBalanceVal = cleanNum(rows[2] && rows[2][7]);
+          const interestBalVal = cleanNum(rows[4] && rows[4][7]);
+
+          // Set calculation input to Loan Balance (H3)
+          document.getElementById("principalAmount").value = loanBalanceVal;
+          
+          // Populate display-only metrics
+          document.getElementById("principalPaid").innerText = principalPaidVal.toLocaleString();
+          document.getElementById("additionalPrepaymentDisplay").innerText = prepayVal.toLocaleString();
+          document.getElementById("interestPaidSoFar").innerText = interestPaidVal.toLocaleString();
+          document.getElementById("interestBalance").innerText = interestBalVal.toLocaleString();
+
+          calculate();
+          
+          let now = new Date().toLocaleTimeString();
+          statusEl.innerText = "Synced successfully at " + now;
+        } else {
+          statusEl.innerText = "Sync error: CSV doesn't have enough rows";
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error("Fetch error details:", error);
+    statusEl.innerText = "Error: " + error.message;
+  }
+}
+
+window.addEventListener('DOMContentLoaded', () => {
+  fetchGoogleSheetData();
+  setInterval(fetchGoogleSheetData, 300000);
+});
+
+function daysInMonth(y, m) {
+  return new Date(y, m + 1, 0).getDate();
+}
+function daysInYear(y) {
+  return ((y % 4 === 0 && y % 100 !== 0) || y % 400 === 0) ? 366 : 365;
+}
+
+// Pure simulation relying exclusively on the loan balance input
+function simulate(p, r, emi, em, ea, annualMonth, buildTable) {
+  let balance = Math.max(0, p);
+  let totalInterest = 0;
+  let rows = [];
+  let date = new Date();
+
+  while (balance > 0 && rows.length < 1200) {
+    let y = date.getFullYear();
+    let m = date.getMonth();
+    let dim = daysInMonth(y, m);
+    let diy = daysInYear(y);
+
+    let opening = balance;
+    let interest = opening * (r / 100) * (dim / diy);
+    totalInterest += interest;
+    balance += interest;
+
+    let extra = em;
+    if (m === annualMonth) extra += ea;
+
+    let payment = Math.min(emi + extra, balance);
+    balance -= payment;
+
+    if (buildTable) {
+      rows.push({
+        month: date.toLocaleString('en-US', { month: 'short', year: 'numeric' }),
+        opening, interest, emi, extra, closing: balance
+      });
+    }
+
+    date.setMonth(date.getMonth() + 1);
+  }
+
+  return { rows, totalInterest, endDate: date };
+}
+
+function calculate() {
+  const p = +document.getElementById("principalAmount").value;
+  const r = +document.getElementById("interest").value;
+  const emiVal = +document.getElementById("emi").value;
+
+  const em = +document.querySelector('input[name="extraMonthly"]:checked').value;
+  const ea = +document.querySelector('input[name="extraAnnual"]:checked').value;
+  const am = +document.getElementById("annualMonth").value;
+
+  if (p <= 0 || r <= 0 || emiVal <= 0) return;
+
+  const normal = simulate(p, r, emiVal, 0, 0, 0, false);
+  const withExtra = simulate(p, r, emiVal, em, ea, am, true);
+
+  const saved = normal.totalInterest - withExtra.totalInterest;
+
+  document.getElementById("summary").innerHTML = `
+    <b>Loan Ends:</b> ${withExtra.endDate.toLocaleString('en-US',{month:'short',year:'numeric'})}<br>
+    <b>Total Interest (Normal):</b> ₹${normal.totalInterest.toFixed(0)}<br>
+    <b>Total Interest (With Extra):</b> ₹${withExtra.totalInterest.toFixed(0)}<br>
+    <b>Interest Saved:</b> ₹${saved.toFixed(0)}
+  `;
+
+  const tableBody = document.getElementById("tableBody");
+  tableBody.innerHTML = "";
+  withExtra.rows.forEach(r => {
+    tableBody.innerHTML += `
+      <tr>
+        <td>${r.month}</td>
+        <td>${r.opening.toFixed(0)}</td>
+        <td>${r.interest.toFixed(0)}</td>
+        <td>${emiVal.toFixed(0)}</td>
+        <td>${r.extra.toFixed(0)}</td>
+        <td>${r.closing.toFixed(0)}</td>
+      </tr>`;
+  });
+}
+</script>
+
+</body>
+</html>
